@@ -1,8 +1,10 @@
-# vibes-api
+# vibes-api (Custom Edition)
 
 > **Unofficial** Python API client for [vibes.ai](https://vibes.ai/) — Meta's AI video creation studio. Generate videos, images, TTS, lip-sync, and more, all from a Python script or CLI.
-
-This package was built by reverse-engineering the vibes.ai Next.js bundles and observing real network traffic. It is **not** affiliated with, endorsed by, or officially supported by Meta or Vibes.
+> 
+> 🌟 **Créditos y Repositorio Original**: Este proyecto es una versión extendida y personalizada basada en el repositorio original desarrollado por [Ashiq Hussain Mir (@mir-ashiq)](https://github.com/mir-ashiq/VibesAI-api). Todo el reconocimiento y crédito a su autor original por la labor de ingeniería inversa. Esta edición incorpora mejoras de arquitectura (FastAPI no bloqueante, SSE, gestión de rate limits, caché N+1 y correcciones de generación con start frames).
+>
+> This package was built by reverse-engineering the vibes.ai Next.js bundles and observing real network traffic. It is **not** affiliated with, endorsed by, or officially supported by Meta or Vibes.
 
 ---
 
@@ -630,6 +632,17 @@ vibes-api/
 └── research/
     └── ... (reversing notes, sample responses, screenshots)
 ```
+
+---
+
+## 🙏 Créditos y Agradecimientos
+
+Este repositorio es una adaptación con mejoras de arquitectura, rendimiento y estabilidad construida sobre la base de:
+
+* **Autor original**: [Ashiq Hussain Mir (@mir-ashiq)](https://github.com/mir-ashiq)
+* **Repositorio oficial**: [https://github.com/mir-ashiq/VibesAI-api](https://github.com/mir-ashiq/VibesAI-api)
+
+Agradecemos enormemente a Mir Ashiq por haber abierto el código y descifrado las APIs privadas de Vibes.ai. Visita su repositorio si deseas ver el proyecto base original.
 
 ---
 

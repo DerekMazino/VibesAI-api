@@ -588,6 +588,8 @@ call `save_composition()`.
 
 ## Summary Statistics
 
+> **Nota de actualización (`v1.6.0` + SDD P0/P1):** La tabla siguiente corresponde a la línea base histórica de `v1.1.0` usada como backlog inicial. Desde `v1.2.0` y `v1.6.0` ya están implementados **Timeline Composition** (`Composition` en `vibes_api/composition.py`, 24/24), **Publishing** (`publish_to_vibes`), **Moodboard PATCH**, **Multi-turn Chat**, **HeyGen Avatar**, **Playables CRUD**, **Rate Limit automático (429)**, **Revision History**, **Analytics** y la paridad `v1.6.0` en **CLI** y **FastAPI** (ver sección 0 y `SDD/04_IMPROVEMENT_ROADMAP_SPEC.md`).
+
 | Category | Total Features | ✅ Implemented | 🟡 Partial | ❌ Missing | ⚪ N/A |
 |---|---|---|---|---|---|
 | Auth & Account | 15 | 9 | 1 | 5 | 0 |

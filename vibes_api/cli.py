@@ -182,7 +182,10 @@ def cmd_prompts_enhance(client: VibesClient, args: argparse.Namespace) -> None:
 
 
 def cmd_ingredients_list(client: VibesClient, args: argparse.Namespace) -> None:
-    items = client.list_ingredients(owner_filter=args.owner_filter)
+    items = client.list_ingredients(
+        owner_filter=args.owner_filter,
+        ingredient_type=getattr(args, "type", None),
+    )
     print(f"{len(items)} ingredient(s):", file=sys.stderr)
     for it in items:
         print(f"  [{it.get('ingredientType')}] {it.get('name')} (id={it.get('ingredientId')})", file=sys.stderr)
@@ -537,6 +540,41 @@ def cmd_validate_prompt(client: VibesClient, args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+# ----- v1.6.0 commands -----
+
+def cmd_revisions_list(client: VibesClient, args: argparse.Namespace) -> None:
+    _print(client.list_revisions(args.entity_type, args.entity_id, limit=args.limit, offset=args.offset))
+
+
+def cmd_revisions_save(client: VibesClient, args: argparse.Namespace) -> None:
+    snapshot = json.loads(args.snapshot) if args.snapshot else {}
+    _print(client.save_revision(args.entity_type, args.entity_id, snapshot=snapshot, label=args.label))
+
+
+def cmd_media_get(client: VibesClient, args: argparse.Namespace) -> None:
+    _print(client.get_media_item(args.item_id))
+
+
+def cmd_media_favorite(client: VibesClient, args: argparse.Namespace) -> None:
+    _print(client.favorite_content_item(args.item_id))
+
+
+def cmd_media_projects(client: VibesClient, args: argparse.Namespace) -> None:
+    _print(client.list_media_item_projects(args.item_id))
+
+
+def cmd_ingredients_projects(client: VibesClient, args: argparse.Namespace) -> None:
+    _print(client.list_ingredient_projects(args.ingredient_id))
+
+
+def cmd_ingredients_bulk_delete(client: VibesClient, args: argparse.Namespace) -> None:
+    _print(client.bulk_delete_ingredients(args.ids))
+
+
+def cmd_last_export(client: VibesClient, args: argparse.Namespace) -> None:
+    _print(client.get_last_export(args.project_id))
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="vibes-api", description="Vibes.ai API CLI")
     p.add_argument("--cookie", help="meta_session cookie value (or set VIBES_META_SESSION env var)")
@@ -570,7 +608,7 @@ def build_parser() -> argparse.ArgumentParser:
     vid_gen = vid_sub.add_parser("generate", help="Generate videos from a prompt")
     vid_gen.add_argument("--project-id", required=True)
     vid_gen.add_argument("--prompt", required=True)
-    vid_gen.add_argument("--aspect-ratio", default="9:16", choices=["1:1","9:16","16:9","4:5","3:2","2:3"])
+    vid_gen.add_argument("--aspect-ratio", default="9:16", choices=["1:1","9:16","16:9"])
     vid_gen.add_argument("--resolution", default="480p", choices=["480p","720p"])
     vid_gen.add_argument("--variations", type=int, default=4)
     vid_gen.add_argument("--download-dir", help="If set, download MP4s to this dir")
@@ -601,7 +639,7 @@ def build_parser() -> argparse.ArgumentParser:
     img_gen = img_sub.add_parser("generate", help="Generate images from a prompt")
     img_gen.add_argument("--project-id", required=True)
     img_gen.add_argument("--prompt", required=True)
-    img_gen.add_argument("--aspect-ratio", default="1:1", choices=["1:1","9:16","16:9","4:5","3:2","2:3"])
+    img_gen.add_argument("--aspect-ratio", default="1:1", choices=["1:1","9:16","16:9"])
     img_gen.add_argument("--variations", type=int, default=1)
     img_gen.add_argument("--download-dir")
     img_gen.set_defaults(func=cmd_images_generate)
@@ -639,6 +677,15 @@ def build_parser() -> argparse.ArgumentParser:
     med_del = med_sub.add_parser("delete", help="Delete media items")
     med_del.add_argument("--ids", nargs="+", required=True)
     med_del.set_defaults(func=cmd_media_delete)
+    med_get = med_sub.add_parser("get", help="Get media item details")
+    med_get.add_argument("item_id")
+    med_get.set_defaults(func=cmd_media_get)
+    med_fav = med_sub.add_parser("favorite", help="Toggle favorite on a content item")
+    med_fav.add_argument("item_id")
+    med_fav.set_defaults(func=cmd_media_favorite)
+    med_prj = med_sub.add_parser("projects", help="List projects using a media item")
+    med_prj.add_argument("item_id")
+    med_prj.set_defaults(func=cmd_media_projects)
 
     # prompts
     pr = sub.add_parser("prompts", help="Prompt enhancement")
@@ -666,6 +713,12 @@ def build_parser() -> argparse.ArgumentParser:
     ing_del = ing_sub.add_parser("delete", help="Delete an ingredient")
     ing_del.add_argument("ingredient_id")
     ing_del.set_defaults(func=cmd_ingredients_delete)
+    ing_prj = ing_sub.add_parser("projects", help="List projects using an ingredient")
+    ing_prj.add_argument("ingredient_id")
+    ing_prj.set_defaults(func=cmd_ingredients_projects)
+    ing_bdel = ing_sub.add_parser("bulk-delete", help="Bulk delete ingredients")
+    ing_bdel.add_argument("ids", nargs="+")
+    ing_bdel.set_defaults(func=cmd_ingredients_bulk_delete)
 
     # share
     sh = sub.add_parser("share", help="Share links")
@@ -721,7 +774,7 @@ def build_parser() -> argparse.ArgumentParser:
     os_p = sub.add_parser("one-shot", help="End-to-end: create project + generate + download")
     os_p.add_argument("--prompt", required=True)
     os_p.add_argument("--name")
-    os_p.add_argument("--aspect-ratio", default="16:9", choices=["1:1","9:16","16:9","4:5","3:2","2:3"])
+    os_p.add_argument("--aspect-ratio", default="16:9", choices=["1:1","9:16","16:9"])
     os_p.add_argument("--resolution", default="720p", choices=["480p","720p"])
     os_p.add_argument("--variations", type=int, default=4)
     os_p.add_argument("--download-dir")
@@ -827,6 +880,29 @@ def build_parser() -> argparse.ArgumentParser:
     vp = sub.add_parser("validate-prompt", help="Validate prompt length")
     vp.add_argument("--prompt", required=True)
     vp.set_defaults(func=cmd_validate_prompt)
+
+    # ----- v1.6.0 subcommands -----
+
+    # revisions
+    rev = sub.add_parser("revisions", help="Revision history snapshots")
+    rev_sub = rev.add_subparsers(dest="subcmd", required=True)
+    rev_ls = rev_sub.add_parser("list", help="List revisions")
+    rev_ls.add_argument("--entity-type", required=True, choices=["project", "playable"])
+    rev_ls.add_argument("--entity-id", required=True)
+    rev_ls.add_argument("--limit", type=int, default=25)
+    rev_ls.add_argument("--offset", type=int, default=0)
+    rev_ls.set_defaults(func=cmd_revisions_list)
+    rev_sv = rev_sub.add_parser("save", help="Save a revision snapshot")
+    rev_sv.add_argument("--entity-type", required=True, choices=["project", "playable"])
+    rev_sv.add_argument("--entity-id", required=True)
+    rev_sv.add_argument("--label", default="Session end")
+    rev_sv.add_argument("--snapshot", default="{}", help="JSON snapshot string")
+    rev_sv.set_defaults(func=cmd_revisions_save)
+
+    # last-export
+    le = sub.add_parser("last-export", help="Get status of last timeline export")
+    le.add_argument("project_id")
+    le.set_defaults(func=cmd_last_export)
 
     return p
 

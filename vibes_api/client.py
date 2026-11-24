@@ -456,46 +456,6 @@ class VibesClient:
             self._background_thread.join(timeout=5)
             self._background_thread = None
 
-    def _maybe_refresh_cookie(self, resp: requests.Response) -> None:
-        if not self.auto_refresh:
-            return
-        set_cookie = resp.headers.get("Set-Cookie") or resp.headers.get("set-cookie")
-        if not set_cookie:
-            return
-        for part in set_cookie.split(";"):
-            part = part.strip()
-            if part.startswith("meta_session="):
-                new_value = part[len("meta_session="):]
-                if new_value and new_value != self._current_meta_session:
-                    self._set_cookie(new_value)
-                    if self.on_cookie_refresh:
-                        try:
-                            self.on_cookie_refresh(new_value)
-                        except Exception:
-                            pass
-                break
-
-    def start_background_refresh(self) -> None:
-        import threading
-        if self._background_thread and self._background_thread.is_alive():
-            return
-        self._background_stop = threading.Event()
-        def _loop():
-            while not self._background_stop.wait(timeout=self.refresh_interval):
-                try:
-                    self._get("/api/auth/me")
-                except Exception:
-                    pass
-        self._background_thread = threading.Thread(target=_loop, daemon=True, name="vibes-cookie-refresh")
-        self._background_thread.start()
-
-    def stop_background_refresh(self) -> None:
-        if self._background_stop:
-            self._background_stop.set()
-        if self._background_thread:
-            self._background_thread.join(timeout=5)
-            self._background_thread = None
-
     # ------------------------------------------------------------------ #
     #  Low-level helpers
     # ------------------------------------------------------------------ #
@@ -508,6 +468,12 @@ class VibesClient:
 
     def _check(self, resp: requests.Response) -> dict:
         self._maybe_refresh_cookie(resp)
+        if resp.status_code == 429:
+            retry_after_raw = resp.headers.get("Retry-After")
+            cooldown = 60
+            if retry_after_raw and str(retry_after_raw).strip().isdigit():
+                cooldown = max(1, int(str(retry_after_raw).strip()))
+            self._set_rate_limit_cooldown(seconds=cooldown)
         try:
             data = resp.json()
         except ValueError:
@@ -529,37 +495,34 @@ class VibesClient:
             )
         return data
 
-    def _get(self, path: str, params: Optional[dict] = None, **kw) -> dict:
-        resp = self.session.get(self._url(path), params=params, timeout=self.timeout, **kw)
+    def _request(self, method: str, path: str, **kw) -> dict:
+        self._check_rate_limit()
+        url = self._url(path)
+        timeout = kw.pop("timeout", self.timeout)
+        resp = self.session.request(method, url, timeout=timeout, **kw)
         try:
             return self._check(resp)
         except VibesAPIError as e:
             if e.status == 401 and not self._session_expired:
                 if self._handle_401():
-                    # Session was restored — retry the request ONCE
-                    resp = self.session.get(self._url(path), params=params, timeout=self.timeout, **kw)
+                    resp = self.session.request(method, url, timeout=timeout, **kw)
                     return self._check(resp)
-            # Re-login failed or not enabled — raise the original error
             raise
+
+    def _get(self, path: str, params: Optional[dict] = None, **kw) -> dict:
+        return self._request("GET", path, params=params, **kw)
 
     def _post(self, path: str, json_body: Optional[dict] = None, **kw) -> dict:
-        resp = self.session.post(self._url(path), json=json_body, timeout=self.timeout, **kw)
-        try:
-            return self._check(resp)
-        except VibesAPIError as e:
-            if e.status == 401 and not self._session_expired:
-                if self._handle_401():
-                    resp = self.session.post(self._url(path), json=json_body, timeout=self.timeout, **kw)
-                    return self._check(resp)
-            raise
+        return self._request("POST", path, json=json_body, **kw)
 
     def _put(self, path: str, json_body: Optional[dict] = None, **kw) -> dict:
-        resp = self.session.put(self._url(path), json=json_body, timeout=self.timeout, **kw)
-        return self._check(resp)
+        return self._request("PUT", path, json=json_body, **kw)
+
+    def _patch(self, path: str, json_body: Optional[dict] = None, **kw) -> dict:
+        return self._request("PATCH", path, json=json_body, **kw)
 
     def _delete(self, path: str, **kw) -> dict:
-        resp = self.session.delete(self._url(path), timeout=self.timeout, **kw)
-        return self._check(resp)
+        return self._request("DELETE", path, **kw)
 
     # ------------------------------------------------------------------ #
     #  Auth & system
@@ -944,12 +907,22 @@ class VibesClient:
 
         inputs = []
         for _ in range(variations):
-            inp = {
-                "type": "prompt",
-                "value": prompt,
-                "original_prompt": prompt,
-                "config": input_config,
-            }
+            if start_frame:
+                inp = {
+                    "type": "image",
+                    "imageUrl": start_frame.get("image_url"),
+                    "imageEntId": start_frame.get("image_ent_id"),
+                    "prompt": prompt,
+                    "original_prompt": prompt,
+                    "config": input_config,
+                }
+            else:
+                inp = {
+                    "type": "prompt",
+                    "value": prompt,
+                    "original_prompt": prompt,
+                    "config": input_config,
+                }
             inputs.append(inp)
 
         # 3) Trigger generation
@@ -2651,9 +2624,15 @@ class VibesClient:
             timeout=max(self.timeout, 600),
         )
         if not resp.ok:
+            msg = None
             try:
                 err = resp.json()
-                msg = err.get("error", {}).get("title") if isinstance(err, dict) else None
+                if isinstance(err, dict):
+                    err_val = err.get("error")
+                    if isinstance(err_val, dict):
+                        msg = err_val.get("detail") or err_val.get("title") or err_val.get("message")
+                    elif isinstance(err_val, str):
+                        msg = err_val
             except ValueError:
                 msg = None
             raise VibesAPIError(msg or f"Export failed: HTTP {resp.status_code}",
@@ -3443,12 +3422,7 @@ class VibesClient:
             body["removeImages"] = remove_images
         if name is not None:
             body["name"] = name
-        resp = self.session.patch(
-            self._url(f"/api/moodboards/{moodboard_id}"),
-            json=body,
-            timeout=self.timeout,
-        )
-        return self._check(resp).get("moodboard", {})
+        return self._patch(f"/api/moodboards/{moodboard_id}", json_body=body).get("moodboard", {})
 
     def lookup_moodboard_by_code(self, moodboard_code: str) -> Optional[str]:
         """Find a moodboard ID by its code. Returns None if not found."""
@@ -4222,20 +4196,21 @@ class VibesClient:
         """
         all_media = self.list_media(limit=limit * 2, offset=offset, type="video")
         filtered = []
+        batch_cache: Dict[str, Optional[dict]] = {}
         for item in all_media.get("items", []):
-            # Check if this item's config includes the ingredient
-            # We'd need to fetch the batch to check config, so we do a best-effort filter
-            # based on the batchId being in the item
             batch_id = item.get("batchId")
             if batch_id:
-                try:
-                    batch = self.get_batch(batch_id)
+                if batch_id not in batch_cache:
+                    try:
+                        batch_cache[batch_id] = self.get_batch(batch_id)
+                    except VibesAPIError:
+                        batch_cache[batch_id] = None
+                batch = batch_cache[batch_id]
+                if batch:
                     config = batch.get("config") or {}
                     ingredients = config.get("ingredients") or []
                     if any(i.get("ingredientId") == ingredient_id for i in ingredients):
                         filtered.append(item)
-                except VibesAPIError:
-                    continue
             if len(filtered) >= limit:
                 break
         return {

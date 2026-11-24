@@ -69,9 +69,14 @@ dmypy.json
 # Project-specific
 # Don't commit generated test outputs or sample videos
 test-output/
+validation_out/
 *.mp4
 *.mp3
 *.wav
+
+# Agents and workspace skills
+.agents/
+agents/
 
 # Don't commit real session cookies (rotate them yourself)
 .env

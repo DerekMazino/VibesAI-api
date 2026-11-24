@@ -366,6 +366,33 @@ class TestFrameHandle(unittest.TestCase):
         h = VibesClient.build_frame_handle({"mediaEntId": "1", "imageUrl": "x"}, source="asset")
         self.assertEqual(h["source"], "asset")
 
+    def test_generate_video_with_start_frame_uses_image_input(self):
+        c = VibesClient(meta_session="test-cookie", auto_refresh=False)
+        sf = c.build_frame_handle({"mediaEntId": "ent-123", "imageUrl": "https://img/a.png"})
+        posted = []
+
+        def fake_post(path, json_body=None, **kw):
+            posted.append((path, json_body))
+            return {"batchId": "b-1", "needsPolling": False}
+
+        with unittest.mock.patch.object(c, "_post", side_effect=fake_post), \
+             unittest.mock.patch("time.sleep"):
+            c.generate_video(
+                project_id="proj-1",
+                prompt="animate this",
+                start_frame=sf,
+                variations=1,
+                poll=False,
+            )
+
+        gen_calls = [body for path, body in posted if path == "/api/generate/videos"]
+        self.assertEqual(len(gen_calls), 1)
+        inp = gen_calls[0]["inputs"][0]
+        self.assertEqual(inp["type"], "image")
+        self.assertEqual(inp["imageEntId"], "ent-123")
+        self.assertEqual(inp["imageUrl"], "https://img/a.png")
+        self.assertEqual(inp["prompt"], "animate this")
+
 
 class TestEntityExtraction(unittest.TestCase):
     def test_video_ent_id_dict(self):
@@ -1020,6 +1047,138 @@ class TestTtsFallback(unittest.TestCase):
         import importlib
         app_mod = importlib.import_module("server.app")
         self.assertIn("synthesize_speech_async", dir(app_mod))
+
+
+class TestRoadmapFixes(unittest.TestCase):
+    """Regression tests for SDD/04_IMPROVEMENT_ROADMAP_SPEC.md fixes (P0/P1/P2)."""
+
+    def test_no_duplicate_methods_in_client(self):
+        import ast
+        import vibes_api.client as cm
+        with open(cm.__file__, encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "VibesClient")
+        names = [n.name for n in cls.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        dups = sorted({n for n in names if names.count(n) > 1})
+        self.assertEqual(dups, [], f"Duplicate methods in VibesClient: {dups}")
+
+    def test_429_activates_cooldown_via_check(self):
+        c = VibesClient(meta_session="test-cookie", auto_refresh=False)
+        resp = unittest.mock.MagicMock()
+        resp.status_code = 429
+        resp.ok = False
+        resp.headers = {"Retry-After": "45"}
+        resp.json.return_value = {"error": "Rate limited"}
+        with self.assertRaises(VibesAPIError) as ctx:
+            c._check(resp)
+        self.assertEqual(ctx.exception.status, 429)
+        status = c.get_rate_limit_status()
+        self.assertTrue(status["is_rate_limited"])
+        self.assertGreaterEqual(status["rate_limit_seconds_left"], 40)
+
+    def test_401_triggers_relogin_on_put_delete_and_patch(self):
+        for verb, call in [
+            ("PUT", lambda c: c.update_project("p1", name="New")),
+            ("DELETE", lambda c: c.delete_project("p1")),
+            ("PATCH", lambda c: c.update_moodboard("m1", name="New")),
+        ]:
+            c = VibesClient(meta_session="old", auto_refresh=False)
+            r401 = unittest.mock.MagicMock(status_code=401, ok=False, headers={})
+            r401.json.return_value = {"error": "Unauthorized"}
+            r200 = unittest.mock.MagicMock(status_code=200, ok=True, headers={})
+            r200.json.return_value = {"project": {"id": "p1"}, "moodboard": {"id": "m1"}}
+            with unittest.mock.patch.object(c.session, "request", side_effect=[r401, r200]) as req, \
+                 unittest.mock.patch.object(c, "_handle_401", return_value=True) as h401:
+                call(c)
+                h401.assert_called_once()
+                self.assertEqual(req.call_count, 2, f"{verb} did not retry after 401")
+                self.assertEqual(req.call_args_list[0].args[0], verb)
+
+    def test_export_timeline_handles_string_error(self):
+        c = VibesClient(meta_session="test-cookie", auto_refresh=False)
+        resp = unittest.mock.MagicMock(status_code=500, ok=False)
+        resp.json.return_value = {"error": "Export backend unavailable"}
+        with unittest.mock.patch.object(c.session, "post", return_value=resp):
+            with self.assertRaises(VibesAPIError) as ctx:
+                c.export_timeline("p1", {"tracks": []})
+        self.assertIn("Export backend unavailable", str(ctx.exception))
+        self.assertEqual(ctx.exception.status, 500)
+
+    def test_list_media_by_ingredient_caches_batches(self):
+        c = VibesClient(meta_session="test-cookie", auto_refresh=False)
+        media = {
+            "items": [
+                {"id": f"item-{i}", "batchId": "batch-shared"} for i in range(4)
+            ],
+            "page": {"count": 4},
+        }
+        batch = {"config": {"ingredients": [{"ingredientId": "ing-1"}]}}
+        with unittest.mock.patch.object(c, "list_media", return_value=media), \
+             unittest.mock.patch.object(c, "get_batch", return_value=batch) as gb:
+            res = c.list_media_by_ingredient("ing-1", limit=10)
+        self.assertEqual(len(res["items"]), 4)
+        gb.assert_called_once_with("batch-shared")
+
+    def test_cli_ingredients_list_passes_type(self):
+        from vibes_api.cli import build_parser, cmd_ingredients_list
+        parser = build_parser()
+        args = parser.parse_args(["ingredients", "list", "--type", "CHARACTER"])
+        fake_client = unittest.mock.MagicMock()
+        fake_client.list_ingredients.return_value = []
+        cmd_ingredients_list(fake_client, args)
+        fake_client.list_ingredients.assert_called_once_with(
+            owner_filter="LIBRARY", ingredient_type="CHARACTER"
+        )
+
+    def test_cli_aspect_ratio_choices_strict(self):
+        from vibes_api.cli import build_parser
+        parser = build_parser()
+        ok = parser.parse_args(["videos", "generate", "--project-id", "p", "--prompt", "x", "--aspect-ratio", "16:9"])
+        self.assertEqual(ok.aspect_ratio, "16:9")
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["videos", "generate", "--project-id", "p", "--prompt", "x", "--aspect-ratio", "4:5"])
+
+    def test_cli_v160_subcommands(self):
+        from vibes_api.cli import build_parser
+        parser = build_parser()
+        a1 = parser.parse_args(["revisions", "list", "--entity-type", "project", "--entity-id", "p1"])
+        self.assertEqual(a1.cmd, "revisions")
+        a2 = parser.parse_args(["last-export", "p1"])
+        self.assertEqual(a2.cmd, "last-export")
+        a3 = parser.parse_args(["media", "favorite", "m1"])
+        self.assertEqual(a3.subcmd, "favorite")
+        a4 = parser.parse_args(["ingredients", "bulk-delete", "i1", "i2"])
+        self.assertEqual(a4.ids, ["i1", "i2"])
+
+    def test_server_routes_non_blocking_and_version_synced(self):
+        import importlib
+        import inspect
+        import vibes_api
+        try:
+            app_mod = importlib.import_module("server.app")
+        except ImportError:
+            self.skipTest("fastapi not installed")
+        self.assertEqual(app_mod.app.version, vibes_api.__version__)
+        # Blocking VibesClient endpoints must be regular sync functions (not async def)
+        for fn_name in ("health", "gen_video", "ext_video", "list_projects", "export_timeline", "download_media"):
+            fn = getattr(app_mod, fn_name)
+            self.assertFalse(inspect.iscoroutinefunction(fn), f"{fn_name} should be sync def to avoid blocking event loop")
+        # Async TTS endpoint remains async
+        self.assertTrue(inspect.iscoroutinefunction(app_mod.tts))
+        paths = {r.path for r in app_mod.app.routes}
+        for expected in (
+            "/api/v1/images/animate",
+            "/api/v1/batches/{bid}/regenerate",
+            "/api/v1/revisions",
+            "/api/v1/media/{item_id}",
+            "/api/v1/media/{item_id}/projects",
+            "/api/v1/media/{item_id}/favorite",
+            "/api/v1/ingredients/{iid}/projects",
+            "/api/v1/ingredients/bulk-delete",
+            "/api/v1/moodboards/{mid}",
+            "/api/v1/timeline/chat/stream",
+        ):
+            self.assertIn(expected, paths, f"Missing FastAPI route: {expected}")
 
 
 if __name__ == "__main__":
