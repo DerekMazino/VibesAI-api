@@ -1,5 +1,5 @@
 ================================================================================
-REQUERIMIENTOS FUNCIONALES: GENERACIÓN DE IMÁGENES Y VIDEOS
+REQUERIMIENTOS FUNCIONALES: AUTENTICACIÓN, GENERACIÓN DE IMÁGENES Y VIDEOS
 VibesAI-api (Edición Personalizada v1.6.0)
 ================================================================================
 Fecha de creación : 2026-11-24
@@ -13,9 +13,9 @@ Documento         : REQUERIMIENTOS_FUNCIONALES_IMAGEN_Y_VIDEO.txt
 1. INTRODUCCIÓN Y ALCANCE
 --------------------------------------------------------------------------------
 Este documento formaliza el catálogo completo de requerimientos funcionales (RF)
-que implementa y expone la aplicación VibesAI-api para la generación, edición,
-animación y gestión de imágenes y videos sintéticos generados mediante los modelos
-de difusión Movie Gen / Vibes v2 de Meta.
+que implementa y expone la aplicación VibesAI-api para la autenticación de usuarios,
+así como la generación, edición, animación y gestión de imágenes y videos sintéticos
+generados mediante los modelos de difusión Movie Gen / Vibes v2 de Meta.
 
 Los requerimientos aplican de forma transversal a:
   - Python SDK: Librería nativa ('VibesClient' en 'vibes_api/client.py').
@@ -26,6 +26,76 @@ Los requerimientos aplican de forma transversal a:
 ================================================================================
 2. CATÁLOGO DE REQUERIMIENTOS FUNCIONALES
 ================================================================================
+
+--------------------------------------------------------------------------------
+MÓDULO 0: AUTENTICACIÓN Y GESTIÓN DE SESIÓN (RF-AUTH)
+--------------------------------------------------------------------------------
+
+[RF-AUTH-01] Autenticación Basada en Cookie de Sesión (meta_session)
+- Descripción: El sistema debe autenticar todas las llamadas a la API de Vibes.ai inyectando la cookie de sesión 'meta_session' en la cabecera HTTP 'Cookie' de cada petición saliente.
+- Entrada: Cadena de sesión 'meta_session' (formato UUID v4 + firma criptográfica, e.g. "219a17f9-...").
+- Mecanismos de Carga:
+  1. Parámetro explícito en el constructor: 'VibesClient(meta_session=...)'.
+  2. Variable de entorno: 'VIBES_META_SESSION'.
+  3. Archivo de variables de entorno local: '.env' / '.env.local'.
+- Comportamiento: Configura un 'requests.Session' persistente con cabeceras de emulación de navegador y la cookie 'meta_session'.
+- Salida: Cliente con sesión autenticada lista para despachar operaciones.
+- Prioridad: Crítica.
+
+[RF-AUTH-02] Verificación de Identidad y Estado de Cuenta (get_me)
+- Descripción: El sistema debe permitir consultar la identidad del usuario activo, identificadores internos de Meta y el estado administrativo de la cuenta.
+- Endpoint HTTP: 'GET /api/auth/me'.
+- Comportamiento: Realiza una consulta directa al servicio de cuentas y valida que la sesión no haya caducado.
+- Salida: Estructura JSON con los siguientes campos:
+  * 'id': UUID interno del usuario en Vibes.
+  * 'username': Nombre de usuario registrado en Meta/Instagram.
+  * 'accountStatus': Estado de la cuenta ('ACTIVE', 'DISABLED', 'PENDING').
+  * 'roles': Lista de roles y feature flags asignados (e.g. creadores, admin).
+  * 'sessionId': UUID de la sesión activa.
+  * 'abraUserId': ID numérico de usuario en la plataforma Abra/Meta.
+  * 'kadabraProfile': Perfil extendido con 'kadabraProfileId', avatar y estado incognito.
+- Prioridad: Alta.
+
+[RF-AUTH-03] Cierre de Sesión Seguro (logout)
+- Descripción: El sistema debe permitir invalidar la sesión actual tanto localmente como en los servidores de autenticación de Vibes.ai.
+- Endpoint HTTP: 'POST /api/auth/logout'.
+- Comportamiento: Emite la petición de revocación al servidor y purga las cookies del objeto 'requests.Session' en memoria.
+- Salida: Confirmación de cierre de sesión exitoso.
+- Prioridad: Media.
+
+[RF-AUTH-04] Auto Re-login y Renovación Transparente OIDC (AUTH_META_COOKIES)
+- Descripción: El sistema debe ofrecer un mecanismo de recuperación automática ante expiración de la sesión ('meta_session') sin requerir intervención manual del usuario.
+- Entrada: Variable de entorno 'AUTH_META_COOKIES' (o cookies maestras de autenticación de 'auth.meta.com': 'datr', 'c_user', 'xs', etc.).
+- Comportamiento: Si una petición recibe un código de error HTTP 401 Unauthorized y la variable 'AUTH_META_COOKIES' está definida:
+  1. El cliente intercepta el 401 en el método unificado '_request()'.
+  2. Ejecuta automáticamente el handshake de re-autenticación OIDC contra Meta.
+  3. Extrae la nueva cookie 'meta_session' emitida por el servidor.
+  4. Actualiza la sesión HTTP en caliente.
+  5. Reintenta la petición original fallida de forma transparente.
+- Salida: Petición completada con éxito tras la auto-renovación de credenciales.
+- Prioridad: Alta.
+
+[RF-AUTH-05] Verificación de Estado Operativo de la Plataforma (get_system_status)
+- Descripción: El sistema debe permitir consultar el estado de operatividad de los servicios de Vibes.ai y banners de mantenimiento o incidentes.
+- Endpoint HTTP: 'GET /api/system/status'.
+- Salida: Objeto con estado operativo global y mensajes del sistema.
+- Prioridad: Baja.
+
+[RF-AUTH-06] Registro de Consentimiento y Políticas de Privacidad (record_consent)
+- Descripción: El sistema debe permitir registrar y persistir el consentimiento de cookies y políticas de privacidad en la cuenta del usuario para evitar redirecciones o bloqueos de navegación.
+- Endpoint HTTP: 'POST /api/consent/record'.
+- Entrada: Payload con indicadores de consentimiento aceptados.
+- Prioridad: Baja.
+
+[RF-AUTH-07] Gestión de Privacidad y Borrado de Cuenta
+- Descripción: El sistema debe proporcionar métodos para la eliminación total de la cuenta del usuario, la purga masiva de contenidos multimedia generados y la revocación de publicaciones públicas.
+- Endpoints HTTP:
+  * 'DELETE /api/account' -> Eliminación de cuenta ('delete_account()').
+  * 'POST /api/media/delete-all' -> Purga total de archivos multimedia ('delete_all_media()').
+  * 'POST /api/posts/remove-all' -> Retiro de todas las publicaciones comunitarias ('remove_all_posts()').
+- Salida: Confirmación de eliminación / purga.
+- Prioridad: Media.
+
 
 --------------------------------------------------------------------------------
 MÓDULO 1: GENERACIÓN Y MANIPULACIÓN DE IMÁGENES (RF-IMG)
@@ -204,7 +274,7 @@ MÓDULO 5: RESILIENCIA, SEGURIDAD Y CONTROL DE ERRORES (RF-SEC)
 - Prioridad: Crítica.
 
 [RF-SEC-02] Auto Re-login y Renovación de Sesión (HTTP 401)
-- Descripción: Al recibir un error 401 Unauthorized, si el usuario configuró 'AUTH_META_COOKIES', el cliente debe invocar automáticamente el flujo de refresco de tokens OIDC de Meta y reintentar la petición.
+- Descripción: Al recibir un error 401 Unauthorized, si el usuario configuró 'AUTH_META_COOKIES', el cliente debe invocar automáticamente el flujo de refresco de tokens OIDC de Meta conforme a [RF-AUTH-04] y reintentar la petición.
 - Prioridad: Alta.
 
 [RF-SEC-03] Notificación Detallada de Fallo de Cuotas (GENERATION_FAILED)
