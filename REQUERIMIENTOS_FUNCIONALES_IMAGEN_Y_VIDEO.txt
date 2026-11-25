@@ -1,0 +1,221 @@
+================================================================================
+REQUERIMIENTOS FUNCIONALES: GENERACIÓN DE IMÁGENES Y VIDEOS
+VibesAI-api (Edición Personalizada v1.6.0)
+================================================================================
+Fecha de creación : 2026-11-24
+Proyecto          : VibesAI-api (Cliente, CLI y Servidor REST para vibes.ai)
+Autor del fork    : DerekMazino (Camilo Marín)
+Crédito base      : Ashiq Hussain Mir (@mir-ashiq)
+Documento         : REQUERIMIENTOS_FUNCIONALES_IMAGEN_Y_VIDEO.txt
+================================================================================
+
+
+1. INTRODUCCIÓN Y ALCANCE
+--------------------------------------------------------------------------------
+Este documento formaliza el catálogo completo de requerimientos funcionales (RF)
+que implementa y expone la aplicación VibesAI-api para la generación, edición,
+animación y gestión de imágenes y videos sintéticos generados mediante los modelos
+de difusión Movie Gen / Vibes v2 de Meta.
+
+Los requerimientos aplican de forma transversal a:
+  - Python SDK: Librería nativa ('VibesClient' en 'vibes_api/client.py').
+  - CLI: Interfaz de terminal por consola ('vibes-api' en 'vibes_api/cli.py').
+  - REST API: Servidor web backend ('server/app.py' bajo FastAPI).
+
+
+================================================================================
+2. CATÁLOGO DE REQUERIMIENTOS FUNCIONALES
+================================================================================
+
+--------------------------------------------------------------------------------
+MÓDULO 1: GENERACIÓN Y MANIPULACIÓN DE IMÁGENES (RF-IMG)
+--------------------------------------------------------------------------------
+
+[RF-IMG-01] Generación Text-to-Image (t2i) Sincrónica
+- Descripción: El sistema debe permitir generar una imagen fija fotorrealista a partir de un prompt descriptivo en texto.
+- Entrada: 
+  * 'prompt' (cadena de texto con la descripción escénica y visual).
+  * 'aspect_ratio' (opcional, por defecto 9:16).
+  * 'project_id' (opcional, identificador del proyecto al cual vincular el recurso).
+- Comportamiento: La petición se procesa de forma sincrónica con una latencia de 3 a 8 segundos.
+- Salida: Estructura de datos con 'mediaEntId', 'imageUrl' (alojada en el CDN de Meta) y metadatos de resolución.
+- Prioridad: Alta.
+
+[RF-IMG-02] Selección Estricta de Relaciones de Aspecto para Imágenes
+- Descripción: El sistema debe soportar y validar las tres relaciones de aspecto oficiales admitidas por el motor:
+  * 1:1 (Cuadrado / Square - 1024x1024 px).
+  * 9:16 (Vertical / Portrait - 576x1024 px).
+  * 16:9 (Horizontal / Landscape - 1024x576 px).
+- Regla de Negocio: Cualquier valor fuera de esta terna debe ser rechazado en cliente antes de emitir la llamada HTTP.
+- Prioridad: Alta.
+
+[RF-IMG-03] Edición y Variación de Imagen (Image-to-Image)
+- Descripción: El sistema debe permitir transformar una imagen previamente generada aplicando un nuevo prompt de modificación.
+- Entrada: 'source_image_ent_id' (ID de entidad de la imagen base) y 'prompt' con la directiva de cambio.
+- Salida: Nueva imagen generada conservando la estructura base con los cambios solicitados.
+- Prioridad: Media.
+
+[RF-IMG-04] Subida e Ingesta de Imágenes Locales
+- Descripción: El sistema debe permitir cargar imágenes locales del usuario (PNG, JPEG, WebP) hacia los servidores de Meta.
+- Entrada: Ruta de archivo local ('file_path') o bytes en memoria.
+- Comportamiento: Valida el tipo MIME y gestiona la carga multipart. Si la imagen supera límites de tamaño, advierte o facilita compresión previa.
+- Salida: Objeto con 'imageEntId' y 'imageUrl' listo para ser inyectado como Start Frame en generación de video.
+- Prioridad: Alta.
+
+[RF-IMG-05] Descarga y Almacenamiento Local de Imágenes
+- Descripción: El sistema debe permitir descargar cualquier imagen generada directamente desde su URL del CDN y almacenarla en disco local.
+- Entrada: 'image_url' o 'media_id' y ruta de destino local ('output_path').
+- Salida: Archivo de imagen guardado en el sistema de archivos local.
+- Prioridad: Alta.
+
+
+--------------------------------------------------------------------------------
+MÓDULO 2: GENERACIÓN DE VIDEO BASE (RF-VID)
+--------------------------------------------------------------------------------
+
+[RF-VID-01] Generación Text-to-Video (t2v) Asincrónica
+- Descripción: El sistema debe permitir sintetizar una secuencia de video de ~5 segundos (24 fps) a partir de un prompt descriptivo.
+- Entrada:
+  * 'prompt' (cadena de texto descriptiva).
+  * 'aspect_ratio' (16:9, 9:16 o 1:1).
+  * 'resolution' (720p o 1080p).
+  * 'variations' (número de 1 a 4).
+  * 'video_model' (v2, fast, expressive).
+- Comportamiento: La API encola un lote de generación ('generation_batch') y retorna inmediatamente el identificador 'batch_id' para seguimiento asincrónico.
+- Salida: Objeto del lote con estado inicial 'IN_PROGRESS' o 'PENDING'.
+- Prioridad: Crítica.
+
+[RF-VID-02] Generación Concurrente de Variaciones (Batching)
+- Descripción: El sistema debe admitir la generación de 1 a 4 variaciones simultáneas en una misma solicitud.
+- Entrada: Parámetro entero 'variations' entre 1 y 4.
+- Regla de Negocio: Si 'variations > 1', se activa la bandera interna 'batchVariation: true' en el payload enviado al backend.
+- Salida: Lista de hasta 4 elementos de contenido ('content[]') asociados al lote.
+- Prioridad: Alta.
+
+[RF-VID-03] Selección de Resolución de Renderizado
+- Descripción: El sistema debe permitir alternar entre resolución estándar de alto rendimiento y alta definición:
+  * 720p: 1280x720 (16:9) o 720x1280 (9:16). Menor tiempo de procesamiento (~60-90s).
+  * 1080p: 1920x1080 (16:9) o 1080x1920 (9:16). Mayor detalle y nitidez cinematográfica (~90-180s).
+- Prioridad: Alta.
+
+[RF-VID-04] Selección del Modelo de Difusión Temporal
+- Descripción: El sistema debe permitir especificar la variante del motor de difusión:
+  * 'v2' (Predeterminado): Máxima coherencia de física, iluminación y movimiento.
+  * 'fast': Optimizado para menor tiempo de espera.
+  * 'expressive': Optimizado para dramatismo y expresividad gestual.
+- Prioridad: Media.
+
+[RF-VID-05] Monitorización de Estado de Lote (Polling y Streaming SSE)
+- Descripción: El sistema debe proporcionar mecanismos para consultar el progreso y detectar la finalización de los lotes de video:
+  * Mecanismo Polling: Método 'wait_for_batch(batch_id, timeout, poll_interval)' con sondeo exponencial.
+  * Mecanismo SSE: Endpoint en servidor REST '/api/sync/stream' para recibir eventos Server-Sent Events en tiempo real.
+- Salida: Notificación de estado 'COMPLETED', 'FAILED' o 'GENERATION_FAILED'.
+- Prioridad: Alta.
+
+
+--------------------------------------------------------------------------------
+MÓDULO 3: CONTROL TEMPORAL Y CONSISTENCIA VISUAL (RF-CTL)
+--------------------------------------------------------------------------------
+
+[RF-CTL-01] Anclaje de Fotograma Inicial (Start Frame / Image-to-Video)
+- Descripción: El sistema debe permitir inyectar una imagen fija como el fotograma de inicio obligatorio (segundo 0:00) del video generado.
+- Entrada: Parámetro 'start_frame' con diccionario conteniendo 'imageEntId' y 'imageUrl' (o 'imageHandle').
+- Regla de Negocio: El payload a Vibes.ai debe formatearse como un input de tipo 'image' junto con 'directPromptImageHandle', preservando la identidad visual del sujeto y la composición escénica.
+- Salida: Video sintetizado donde el primer frame coincide exactamente con la imagen de referencia.
+- Prioridad: Crítica.
+
+[RF-CTL-02] Anclaje de Fotograma Final (End Frame)
+- Descripción: El sistema debe permitir fijar la imagen final (segundo 5:00) del video.
+- Entrada: Parámetro 'end_frame' con 'imageEntId' y 'imageUrl'.
+- Comportamiento: La IA interpola el movimiento desde el estado inicial hacia la pose o estado del fotograma final.
+- Prioridad: Media.
+
+[RF-CTL-03] Interpolación Temporal Guiada (Start Frame + End Frame)
+- Descripción: El sistema debe permitir enviar simultáneamente 'start_frame' y 'end_frame'.
+- Comportamiento: El video resultante nace estrictamente en la imagen inicial y culmina en la imagen final, calculando la transición continua intermedia.
+- Prioridad: Media.
+
+[RF-CTL-04] Extensión Automática de Video (Auto Extend)
+- Descripción: El sistema debe permitir prolongar un video existente agregando ~5 segundos adicionales sin modificar la dirección original.
+- Entrada: 'source_video' (objeto completo de contenido obtenido de un batch completado).
+- Comportamiento: Extrae 'videoHandle', 'videoGenEntId' y 'structuredOutput' del clip y genera la continuación temporal automática (ej. de 5s a 10s).
+- Salida: Nuevo video extendido de duración acumulada.
+- Prioridad: Alta.
+
+[RF-CTL-05] Extensión Manual con Directiva Temporal (Manual Extend)
+- Descripción: El sistema debe permitir prolongar un video existente introduciendo un nuevo prompt directivo para alterar la acción continua a partir del último fotograma.
+- Entrada: 'source_video' y 'prompt' con la nueva acción o giro narrativo.
+- Salida: Video extendido con transición fluida desde el último frame hacia la nueva acción solicitada.
+- Prioridad: Alta.
+
+[RF-CTL-06] Edición Video-a-Video (v2v Edit)
+- Descripción: El sistema debe permitir re-renderizar un video completo modificando estilos, atmósfera, clima o texturas mediante una directiva textual, manteniendo la estructura de movimiento original.
+- Entrada: 'source_video' y 'prompt' de edición.
+- Salida: Video transformado con idéntica duración y trayectoria cinemática.
+- Prioridad: Media.
+
+[RF-CTL-07] Animación de Imágenes Estáticas (Auto y Manual Animate)
+- Descripción: El sistema debe permitir convertir cualquier fotografía o ilustración estática en un video en movimiento:
+  * Modo Auto: Reutiliza el prompt original de la imagen.
+  * Modo Manual: Aplica un prompt de movimiento cinemático explícito proporcionado por el usuario.
+- Prioridad: Media.
+
+[RF-CTL-08] Sincronización Labial Facial (Lip-Sync de Avatares)
+- Descripción: El sistema debe permitir sincronizar el movimiento de labios y la expresión de un rostro (en video o imagen fija) con una pista de audio dada.
+- Entrada: 'avatar_image_ent_id' / video de origen y archivo de audio o pista generada por TTS.
+- Salida: Video MP4 con el personaje hablando de manera realista y sincronizada.
+- Prioridad: Media.
+
+
+--------------------------------------------------------------------------------
+MÓDULO 4: GESTIÓN DE PROYECTOS, ASOCIACIÓN Y DESCARGA (RF-MGT)
+--------------------------------------------------------------------------------
+
+[RF-MGT-01] Asociación de Generaciones a Proyectos
+- Descripción: El sistema debe permitir asociar cualquier imagen o lote de video a un proyecto de trabajo específico mediante 'project_id'.
+- Regla de Negocio: Si no se suministra un 'project_id', el sistema utiliza un proyecto temporal o el proyecto por defecto de la cuenta.
+- Prioridad: Media.
+
+[RF-MGT-02] Descarga Directa de Videos y Lotes
+- Descripción: El sistema debe proporcionar utilidades de descarga directa para obtener los archivos MP4 locales:
+  * 'download_video(content_id, path)': Descarga un clip individual resolviendo la URL firmada.
+  * 'download_batch(batch_id, output_dir)': Descarga todas las variaciones de un lote a una carpeta local.
+- Prioridad: Alta.
+
+[RF-MGT-03] Ejecución "One-Shot" desde CLI
+- Descripción: La herramienta de consola debe ofrecer un comando unificado 'one-shot' que orqueste en un solo paso:
+  1. Creación de proyecto temporal.
+  2. Solicitud de generación de video con los parámetros indicados.
+  3. Espera activa (polling) hasta la finalización.
+  4. Descarga automática de los MP4 a una carpeta local especificada.
+- Prioridad: Alta.
+
+[RF-MGT-04] Marcado de Contenido Favorito
+- Descripción: El sistema debe permitir conmutar el estado de favorito de cualquier imagen o video generado ('favorite_content_item').
+- Prioridad: Baja.
+
+
+--------------------------------------------------------------------------------
+MÓDULO 5: RESILIENCIA, SEGURIDAD Y CONTROL DE ERRORES (RF-SEC)
+--------------------------------------------------------------------------------
+
+[RF-SEC-01] Manejo Automático de Límites de Tasa (Rate Limiting HTTP 429)
+- Descripción: El sistema debe interceptar respuestas HTTP 429 de Vibes.ai, leer la cabecera 'Retry-After' (o aplicar retroceso exponencial por defecto) y reintentar de forma transparente sin fallar la ejecución.
+- Prioridad: Crítica.
+
+[RF-SEC-02] Auto Re-login y Renovación de Sesión (HTTP 401)
+- Descripción: Al recibir un error 401 Unauthorized, si el usuario configuró 'AUTH_META_COOKIES', el cliente debe invocar automáticamente el flujo de refresco de tokens OIDC de Meta y reintentar la petición.
+- Prioridad: Alta.
+
+[RF-SEC-03] Notificación Detallada de Fallo de Cuotas (GENERATION_FAILED)
+- Descripción: Cuando la cuenta del usuario agote los créditos o cuotas de generación en Meta, el sistema debe parsear el error específico y notificar la causa exacta al usuario sin arrojar excepciones crípticas.
+- Prioridad: Alta.
+
+[RF-SEC-04] Validación Temprana Offline
+- Descripción: El sistema debe validar localmente la existencia de archivos, formatos de imagen compatibles, aspectos de ratio permitidos y presencia de credenciales antes de realizar llamadas a la red.
+- Prioridad: Alta.
+
+
+================================================================================
+FIN DEL DOCUMENTO
+================================================================================

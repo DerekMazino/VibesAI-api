@@ -274,3 +274,4 @@ vibes-api one-shot --prompt "Serene sunrise over mountains" --aspect-ratio 16:9 
    * Re-autenticación OIDC transparente en caso de tener configurado `AUTH_META_COOKIES`.
 4. **Dimensiones estrictas de Aspect Ratio:**
    * Solo son válidas las proporciones `1:1`, `9:16` y `16:9`. Cualquier otro valor es rechazado a nivel de cliente para evitar consumo infructuoso de peticiones.
+
